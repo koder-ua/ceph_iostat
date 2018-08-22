@@ -2,13 +2,14 @@ package main
 
 import (
 	"os/exec"
-	"os"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
 	"flag"
 	"strconv"
+	"strings"
+	"os"
 )
 
 
@@ -37,7 +38,47 @@ type RadosDFLuminous struct {
 	Pools []PoolInfoLuminous
 };
 
+func isLuminous() (error, bool) {
+	output, err := exec.Command("ceph", "mon", "versions").CombinedOutput()
+	if err != nil {
+		return err, false
+	}
+	result := make(map[string]uint)
+	json.Unmarshal([]byte(output), &result)
+	luminous := true
+	for ver := range result {
+		if (!strings.Contains(ver, "luminous")) {
+			luminous = false
+		}
+	}
+	return nil, luminous
+}
+
+func getRadosDF(res *RadosDFLuminous) error {
+	output, err := exec.Command("rados", "df", "-f", "json").CombinedOutput()
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal([]byte(output), res)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func main() {
+	err, isLum := isLuminous()
+	if (err != nil) {
+		fmt.Println("Failed to get ceph version", err)
+		os.Exit(1)
+	}
+
+	if (!isLum) {
+		fmt.Println("Only luminous ceph is supported")
+		os.Exit(1)
+	}
+
 	lineFormat := "%30s    %10d  %10d  %10d  %10d  %10d  %10d\n"
 	lineFormatHdr := "%30s    %10s  %10s  %10s  %10s  %10s  %10s\n"
 
@@ -53,7 +94,7 @@ func main() {
 		timeout_s_t, err := strconv.Atoi(flag.Args()[0])
 		if err != nil {
 			fmt.Println("Failed to parse timeout option", err)
-			return
+			os.Exit(1)
 		}
 		timeout_s = uint(timeout_s_t)
 	} else {
@@ -63,16 +104,11 @@ func main() {
 	timeout_ns := time.Duration(timeout_s) * time.Second
 	for cnt := -1 ;; cnt++ {
 		start := time.Now()
-		output, err := exec.Command("rados", "df", "-f", "json").CombinedOutput()
-		if err != nil {
-			os.Stderr.WriteString(err.Error())
-			break
-		}
 
-		err = json.Unmarshal([]byte(output), radosdf_curr)
-		if err != nil {
-			fmt.Println("error:", err)
-			break
+		err = getRadosDF(radosdf_curr);
+		if (err != nil) {
+			fmt.Println("Failed to get rados df stats:", err)
+			os.Exit(1)
 		}
 
 		if (radosdf_prev != nil) {
